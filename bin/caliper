@@ -1,0 +1,13 @@
+#!/bin/sh
+
+# rough
+
+export PATH=$PATH:$JAVA_HOME/bin
+base=`dirname $0`
+version=`ls -1 $base/../target | tail -n 1`
+classes="$base/../target/"$version
+jars="$base/../lib_managed/"$version
+echo $build_base
+CLASSPATH="$CLASSPATH:$base/../lib/*:$jars/compile/*:$classes/classes:$classes/test-classes"
+exec java -cp $CLASSPATH com.google.caliper.Runner $*
+
