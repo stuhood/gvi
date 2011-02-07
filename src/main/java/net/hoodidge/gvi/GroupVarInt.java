@@ -32,7 +32,7 @@ public final class GroupVarInt
 
     private static final int[] EMPTY = new int[0];
 
-    private static final ThreadLocal<int[]> GROUP_TEMP = new ThreadLocal<int[]>()
+    private static final ThreadLocal<int[]> GROUP_OUT = new ThreadLocal<int[]>()
     {
         @Override protected int[] initialValue()
         {
@@ -40,16 +40,22 @@ public final class GroupVarInt
         }
     };
 
+    private static final ThreadLocal<byte[]> GROUP_IN = new ThreadLocal<byte[]>()
+    {
+        @Override protected byte[] initialValue()
+        {
+            return new byte[MAX_BYTES_PER_GROUP];
+        }
+    };
+
     // a lookup table from tags to possible layouts for the group: each layout
-    // contains 4 x 2-bit lengths and the total length of the layout
-    private static final int[][] LENGTHS = new int[256][5];
+    // contains 4 x 2-bit lengths
+    private static final int[][] LENGTHS = new int[256][4];
     // the reverse of the above table: tag byte from 4 x 2-bit lengths
     private static final byte[][][][] REVERSE = new byte[4][4][4][4];
     // the offsets from the beginning of the group (including the tag)
     // to the position we should mask at for a particular value length
     private static final int[][] OFFSETS = new int[256][4];
-    // masks for each length
-    private static final int[] MASKS = new int[]{0xFF, 0xFFFF, 0xFFFFFF, 0xFFFFFFFF};
     static
     {
         for (int i = 0; i < 256; i++)
@@ -67,21 +73,10 @@ public final class GroupVarInt
                 assert 0 <= length && length < 4 : length;
                 layout[k] = length;
 
-                // offset for value of length 'length' in position 'k': for values
-                // of length 0 or 1 (1 or 2 bytes) we perform a short read
-                switch (length)
-                {
-                    case 0:
-                    case 2: offsets[k] = offset - 1; break;
-                    case 1:
-                    case 3: offsets[k] = offset; break;
-                }
-
+                // offset for value of length 'length' in position 'k'
+                offsets[k] = offset;
                 offset += 1 + length;
             }
-            // total length of the group in bytes, including the tag
-            layout[4] = 5 + layout[0] + layout[1] + layout[2] + layout[3];
-            assert 5 <= layout[4] && layout[4] <= 17 : layout[4];
             // reverse lookup
             REVERSE[layout[0]][layout[1]][layout[2]][layout[3]] = b(i);
         }
@@ -184,24 +179,24 @@ public final class GroupVarInt
         int[] out;
 
         // decode first group to get the length
-        int[] temp = GROUP_TEMP.get();
-        decodeGroup(buff, temp, 0);
+        int[] tempout = GROUP_OUT.get();
+        decodeGroup(buff, tempout, 0);
         // copy valid values from temp
-        int length = temp[0];
+        int length = tempout[0];
         switch (length)
         {
             case 0: out = EMPTY; break;
             case 1:
                 out = new int[1];
-                out[0] = temp[1];
+                out[0] = tempout[1];
                 break;
             case 2:
                 out = new int[2];
-                System.arraycopy(temp, 1, out, 0, 2);
+                System.arraycopy(tempout, 1, out, 0, 2);
                 break;
             default:
                 out = new int[length];
-                System.arraycopy(temp, 1, out, 0, 3);
+                System.arraycopy(tempout, 1, out, 0, 3);
                 break;
         }
 
@@ -215,8 +210,8 @@ public final class GroupVarInt
         int partials = length - idx;
         if (partials > 0)
         {
-            decodeGroup(buff, temp, 0);
-            System.arraycopy(temp, 0, out, idx, partials);
+            decodeGroup(buff, tempout, 0);
+            System.arraycopy(tempout, 0, out, idx, partials);
         }
 
         buff.rewind();
@@ -225,25 +220,22 @@ public final class GroupVarInt
 
     private static void decodeGroup(ByteBuffer buff, int[] array, int offset)
     {
-        int tag = 0xFF & buff.get(buff.position());
-        // perform absolute gets to decode values in the group
+        int tag = 0xFF & buff.get();
         array[offset] = decodeValue(buff, LENGTHS[tag][0], OFFSETS[tag][0]);
         array[offset+1] = decodeValue(buff, LENGTHS[tag][1], OFFSETS[tag][1]);
         array[offset+2] = decodeValue(buff, LENGTHS[tag][2], OFFSETS[tag][2]);
         array[offset+3] = decodeValue(buff, LENGTHS[tag][3], OFFSETS[tag][3]);
-        // reposition for the next group
-        buff.position(buff.position() + LENGTHS[tag][4]);
     }
 
     private static int decodeValue(ByteBuffer buff, int length, int offset)
     {
-        int v;
+        int v = 0xFF & buff.get();
         switch (length)
         {
-            case 0:  v = MASKS[0] & buff.getShort(buff.position() + offset); break;
-            case 1:  v = MASKS[1] & buff.getShort(buff.position() + offset); break;
-            case 2:  v = MASKS[2] & buff.getInt(buff.position() + offset); break;
-            default: v = buff.getInt(buff.position() + offset); break;
+            // NB: falling through
+            case 3: v = (v << 8) | (0xFF & buff.get());
+            case 2: v = (v << 8) | (0xFF & buff.get());
+            case 1: v = (v << 8) | (0xFF & buff.get());
         }
         // decode from zigzag
         return zag(v);
