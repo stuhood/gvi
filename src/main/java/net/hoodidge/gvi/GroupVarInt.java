@@ -71,10 +71,8 @@ public final class GroupVarInt
                 // of length 0 or 1 (1 or 2 bytes) we perform a short read
                 switch (length)
                 {
-                    // short read
                     case 0:
                     case 2: offsets[k] = offset - 1; break;
-                    // int read
                     case 1:
                     case 3: offsets[k] = offset; break;
                 }
@@ -89,16 +87,31 @@ public final class GroupVarInt
         }
     };
 
+    private static int completeGroups(int count)
+    {
+        // complete groups (with length prepended)
+        return (++count) >> 2;
+    }
+
+    /** The maximum size in bytes of 'count' integers. */
+    public static int maxSize(int count)
+    {
+        int groups = completeGroups(count);
+        // partial group
+        if ((count & 0x1) == 0)
+            groups++;
+        return groups * MAX_BYTES_PER_GROUP;
+    }
+
     /**
      * @return Encodes 'length' values into a new or recycled buffer.
      */
     public static ByteBuffer encode(int[] values, int length, ByteBuffer reuse)
     {
         // 'length' will be encoded as the first value in the array.
-        int adjustedLength = length + 1;
-        ByteBuffer buff = reuse;
-        if (buff == null || adjustedLength > buff.capacity() / MAX_BYTES_PER_GROUP)
-            buff = ByteBuffer.allocate(adjustedLength * MAX_BYTES_PER_GROUP);
+        int maxSize = maxSize(length);
+        ByteBuffer buff = (reuse == null || reuse.capacity() < maxSize) ?
+            ByteBuffer.allocate(maxSize) : reuse;
         buff.clear();
 
         // encode first group with length
@@ -110,9 +123,9 @@ public final class GroupVarInt
             default: encodeGroup(buff, length, values[0], values[1], values[2]); break;
         }
 
-        // encode complete groups, which will start with the 3rd input value
+        // encode complete groups, which will start with the 4th input value
         int idx = 3;
-        int groups = adjustedLength >> 2; // div by four
+        int groups = completeGroups(length);
         for (int group = 1; group < groups; group++)
             encodeGroup(buff, values[idx++], values[idx++], values[idx++], values[idx++]);
 
